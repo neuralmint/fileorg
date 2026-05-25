@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""
+fileorg — Organize files by type, date, or size.
+
+Usage:
+    fileorg type <dir>          Group files by extension
+    fileorg date <dir>          Group files by year/month
+    fileorg size <dir>          Group by size ranges
+    fileorg dupes <dir>         Find duplicate files by content hash
+    fileorg empty <dir>         Find empty files and directories
+    fileorg tree <dir>          Print directory tree
+    fileorg ext <dir> <ext>     List all files with a given extension
+    fileorg rename <dir>        Preview renaming files to sorted names
+"""
+
+import hashlib
+import os
+import sys
+from collections import defaultdict
+from datetime import datetime
+
+BTC = "bc1q6ud0w3036ye2vfzkftwywarqswqu3jehs4nqe7"
+
+def walk_files(path):
+    for root, dirs, files in os.walk(path):
+        for f in sorted(files):
+            yield os.path.join(root, f)
+        for d in sorted(dirs):
+            yield os.path.join(root, d)
+
+def cmd_type(path):
+    ext_count = defaultdict(int)
+    ext_size = defaultdict(int)
+    total = 0
+    for f in walk_files(path):
+        if os.path.isfile(f):
+            _, ext = os.path.splitext(f)
+            ext = ext.lower() or "(no ext)"
+            ext_count[ext] += 1
+            ext_size[ext] += os.path.getsize(f)
+            total += 1
+    
+    print(f"Total files: {total}\n")
+    for ext in sorted(ext_count, key=lambda e: -ext_count[e]):
+        size = ext_size[ext]
+        if size > 1024**2:
+            s = f"{size/1024**2:.1f} MB"
+        elif size > 1024:
+            s = f"{size/1024:.1f} KB"
+        else:
+            s = f"{size} B"
+        bar = "█" * max(1, ext_count[ext] * 40 // max(ext_count.values()))
+        print(f"  {ext:<12} {ext_count[ext]:>5}  {s:>8}  {bar}")
+
+def cmd_date(path):
+    monthly = defaultdict(int)
+    for f in walk_files(path):
+        if os.path.isfile(f):
+            mtime = os.path.getmtime(f)
+            dt = datetime.fromtimestamp(mtime)
+            key = dt.strftime("%Y-%m")
+            monthly[key] += 1
+    
+    print(f"Files by month:\n")
+    for month in sorted(monthly):
+        bar = "█" * max(1, monthly[month] * 30 // max(monthly.values()))
+        print(f"  {month}  {monthly[month]:>5}  {bar}")
+
+def cmd_size(path):
+    ranges = [("0-1 KB", 0, 1024), ("1-10 KB", 1024, 10*1024),
+              ("10-100 KB", 10*1024, 100*1024), ("100 KB-1 MB", 100*1024, 1024**2),
+              ("1-10 MB", 1024**2, 10*1024**2), ("10-100 MB", 10*1024**2, 100*1024**2),
+              (">100 MB", 100*1024**2, float('inf'))]
+    counts = defaultdict(int)
+    for f in walk_files(path):
+        if os.path.isfile(f):
+            size = os.path.getsize(f)
+            for label, lo, hi in ranges:
+                if lo <= size < hi:
+                    counts[label] += 1
+                    break
+    for label, _, _ in ranges:
+        bar = "█" * max(1, counts[label] * 30 // max(counts.values() or [1]))
+        print(f"  {label:<15} {counts[label]:>5}  {bar}")
+
+def cmd_dupes(path):
+    hashes = defaultdict(list)
+    for f in walk_files(path):
+        if os.path.isfile(f) and os.path.getsize(f) > 0:
+            h = hashlib.md5(open(f, 'rb').read(4096)).hexdigest()
+            hashes[h].append(f)
+    
+    dupes = {h: flist for h, flist in hashes.items() if len(flist) > 1}
+    if not dupes:
+        print("No duplicates found")
+        return
+    print(f"Found {len(dupes)} duplicate groups:\n")
+    for h, flist in sorted(dupes.items(), key=lambda x: -os.path.getsize(x[1][0])):
+        size = os.path.getsize(flist[0])
+        print(f"  {size/1024:.1f} KB — {len(flist)} copies")
+        for f in flist:
+            print(f"    {f}")
+
+def cmd_empty(path):
+    empty_files = []
+    empty_dirs = []
+    for root, dirs, files in os.walk(path):
+        for f in files:
+            fp = os.path.join(root, f)
+            if os.path.getsize(fp) == 0:
+                empty_files.append(fp)
+        for d in dirs:
+            dp = os.path.join(root, d)
+            try:
+                if not os.listdir(dp):
+                    empty_dirs.append(dp)
+            except PermissionError:
+                pass
+    if empty_files:
+        print(f"Empty files ({len(empty_files)}):")
+        for f in empty_files[:20]:
+            print(f"  {f}")
+    if empty_dirs:
+        print(f"\nEmpty dirs ({len(empty_dirs)}):")
+        for d in empty_dirs[:20]:
+            print(f"  {d}")
+    if not empty_files and not empty_dirs:
+        print("No empty files or directories found")
+
+def cmd_tree(path):
+    def _tree(p, prefix=""):
+        entries = sorted(os.listdir(p))
+        for i, entry in enumerate(entries):
+            is_last = i == len(entries) - 1
+            connector = "└── " if is_last else "├── "
+            full = os.path.join(p, entry)
+            print(f"{prefix}{connector}{entry}")
+            if os.path.isdir(full) and not os.path.islink(full):
+                extension = "    " if is_last else "│   "
+                _tree(full, prefix + extension)
+    root_name = os.path.basename(path.rstrip("/")) or path
+    print(root_name)
+    _tree(path)
+
+def cmd_ext(path, ext):
+    ext = ext if ext.startswith(".") else f".{ext}"
+    count = 0
+    for f in walk_files(path):
+        if os.path.isfile(f) and f.lower().endswith(ext.lower()):
+            print(f"  {f}")
+            count += 1
+    if count == 0:
+        print(f"No .{ext} files found")
+    else:
+        print(f"\n{count} files total")
+
+def cmd_rename(path):
+    """Preview renaming files to numbered names."""
+    files = [f for f in walk_files(path) if os.path.isfile(f)]
+    for i, f in enumerate(files, 1):
+        d = os.path.dirname(f)
+        _, ext = os.path.splitext(f)
+        new = os.path.join(d, f"file_{i:04d}{ext}")
+        print(f"  {os.path.basename(f)}  →  {os.path.basename(new)}")
+
+def main():
+    if len(sys.argv) < 3:
+        print(f"""fileorg — File organization tools
+
+Usage:
+  fileorg type <dir>        Group by extension
+  fileorg date <dir>        Group by year/month
+  fileorg size <dir>        Group by size range
+  fileorg dupes <dir>       Find duplicate files
+  fileorg empty <dir>       Find empty files/dirs
+  fileorg tree <dir>        Print directory tree
+  fileorg ext <dir> <ext>   Find files by extension
+  fileorg rename <dir>      Preview numbered rename
+
+Donations: {BTC} (BTC)""")
+        return
+    
+    cmd, path = sys.argv[1], sys.argv[2]
+    if not os.path.isdir(path):
+        print(f"Directory not found: {path}")
+        return
+    
+    cmds = {
+        "type": lambda: cmd_type(path),
+        "date": lambda: cmd_date(path),
+        "size": lambda: cmd_size(path),
+        "dupes": lambda: cmd_dupes(path),
+        "empty": lambda: cmd_empty(path),
+        "tree": lambda: cmd_tree(path),
+        "ext": lambda: cmd_ext(path, sys.argv[3]) if len(sys.argv) > 3 else print("Need extension"),
+        "rename": lambda: cmd_rename(path),
+    }
+    
+    if cmd in cmds:
+        cmds[cmd]()
+    else:
+        print(f"Unknown: {cmd}")
+
+if __name__ == "__main__":
+    main()
