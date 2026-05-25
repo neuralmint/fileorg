@@ -176,7 +176,6 @@ Usage:
   fileorg ext <dir> <ext>   Find files by extension
   fileorg rename <dir>      Preview numbered rename
 
-Donations: {BTC} (BTC)""")
         return
     
     cmd, path = sys.argv[1], sys.argv[2]
