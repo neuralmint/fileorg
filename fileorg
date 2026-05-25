@@ -19,7 +19,6 @@ import sys
 from collections import defaultdict
 from datetime import datetime
 
-BTC = "bc1q6ud0w3036ye2vfzkftwywarqswqu3jehs4nqe7"
 
 def walk_files(path):
     for root, dirs, files in os.walk(path):
